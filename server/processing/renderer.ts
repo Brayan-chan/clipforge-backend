@@ -14,6 +14,7 @@ import { getClipComposition, type CompositionVariant } from '../../src/utils/com
 import { CLIPS_DIR, ensureStorageDirs } from '../db';
 import { generateThumbnail } from './videoAnalyzer';
 import {
+  deleteObjectFromStorage,
   isObjectStorageConfigured,
   uploadFileToObjectStorage,
 } from './objectStorage';
@@ -561,26 +562,36 @@ export async function renderClipWithFfmpeg(params: {
   const thumbnailUrl = await generateThumbnail(mp4Path, thumbName, Math.min(1.5, clipDuration / 2));
 
   if (isObjectStorageConfigured()) {
-    const [exportedUrl, storedSrtUrl] = await Promise.all([
-      uploadFileToObjectStorage({
-        filePath: mp4Path,
-        key: `clips/${mp4Name}`,
-        contentType: 'video/mp4',
-      }),
-      uploadFileToObjectStorage({
-        filePath: srtPath,
-        key: `clips/${srtName}`,
-        contentType: 'application/x-subrip; charset=utf-8',
-      }),
-    ]);
-    safeDeleteFile(mp4Path);
-    safeDeleteFile(srtPath);
-    return {
-      exportedUrl,
-      srtUrl: storedSrtUrl,
-      thumbnailUrl,
-      exportedSizeBytes: stat.size,
-    };
+    const mp4Key = `clips/${mp4Name}`;
+    const srtKey = `clips/${srtName}`;
+    try {
+      const [exportedUrl, storedSrtUrl] = await Promise.all([
+        uploadFileToObjectStorage({
+          filePath: mp4Path,
+          key: mp4Key,
+          contentType: 'video/mp4',
+        }),
+        uploadFileToObjectStorage({
+          filePath: srtPath,
+          key: srtKey,
+          contentType: 'application/x-subrip; charset=utf-8',
+        }),
+      ]);
+      safeDeleteFile(mp4Path);
+      safeDeleteFile(srtPath);
+      return {
+        exportedUrl,
+        srtUrl: storedSrtUrl,
+        thumbnailUrl,
+        exportedSizeBytes: stat.size,
+      };
+    } catch (error) {
+      await Promise.allSettled([
+        deleteObjectFromStorage(mp4Key),
+        deleteObjectFromStorage(srtKey),
+      ]);
+      throw error;
+    }
   }
 
   return {
