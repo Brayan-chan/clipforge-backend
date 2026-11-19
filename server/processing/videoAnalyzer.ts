@@ -27,13 +27,13 @@ export async function checkFfmpegBinaries(): Promise<{
   let ffmpegAvailable = false;
   let ffprobeAvailable = false;
   try {
-    await execFileAsync('ffmpeg', ['-version'], { timeout: 5000 });
+    await execFileAsync('ffmpeg', ['-version'], { timeout: 30000 });
     ffmpegAvailable = true;
   } catch {
     ffmpegAvailable = false;
   }
   try {
-    await execFileAsync('ffprobe', ['-version'], { timeout: 5000 });
+    await execFileAsync('ffprobe', ['-version'], { timeout: 30000 });
     ffprobeAvailable = true;
   } catch {
     ffprobeAvailable = false;
