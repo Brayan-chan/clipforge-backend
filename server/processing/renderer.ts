@@ -15,6 +15,7 @@ import { CLIPS_DIR, ensureStorageDirs } from '../db';
 import { generateThumbnail } from './videoAnalyzer';
 import {
   deleteObjectFromStorage,
+  extractStoredObjectKey,
   isObjectStorageConfigured,
   uploadFileToObjectStorage,
 } from './objectStorage';
@@ -586,9 +587,11 @@ export async function renderClipWithFfmpeg(params: {
         exportedSizeBytes: stat.size,
       };
     } catch (error) {
+      const thumbnailKey = extractStoredObjectKey(thumbnailUrl);
       await Promise.allSettled([
         deleteObjectFromStorage(mp4Key),
         deleteObjectFromStorage(srtKey),
+        ...(thumbnailKey ? [deleteObjectFromStorage(thumbnailKey)] : []),
       ]);
       throw error;
     }
