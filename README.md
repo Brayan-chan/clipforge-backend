@@ -34,22 +34,22 @@ brew install flyctl
 fly auth login
 ```
 
-2. Cambia `app` en `fly.toml` si `clipforge-backend` ya está ocupado y crea la aplicación sin desplegar:
+2. Cambia `app` en `fly.toml` por un nombre globalmente único y crea la aplicación:
 
 ```bash
-fly launch --no-deploy --copy-config
+fly apps create TU-NOMBRE-DE-APP
 ```
 
 3. Crea el volumen persistente en Miami:
 
 ```bash
-fly volumes create clipforge_data --region mia --size 10
+fly volumes create clipforge_data --app TU-NOMBRE-DE-APP --region mia --size 10
 ```
 
 4. Configura secretos. Nunca subas `.env` a GitHub:
 
 ```bash
-fly secrets set \
+fly secrets set --app TU-NOMBRE-DE-APP \
   FRONTEND_ORIGIN=https://TU-FRONTEND.vercel.app \
   GEMINI_API_KEY=... \
   S3_ENDPOINT=https://TU_ACCOUNT_ID.r2.cloudflarestorage.com \
@@ -65,9 +65,9 @@ fly secrets set \
 5. Despliega y revisa los logs:
 
 ```bash
-fly deploy
-fly status
-fly logs
+fly deploy --app TU-NOMBRE-DE-APP
+fly status --app TU-NOMBRE-DE-APP
+fly logs --app TU-NOMBRE-DE-APP
 ```
 
 6. En Vercel configura y vuelve a desplegar:
@@ -93,6 +93,8 @@ Ejemplo conceptual:
   }
 ]
 ```
+
+Configura además una regla de ciclo de vida para borrar objetos incompletos o no registrados bajo `uploads/` después de algunos días. ClipForge elimina los objetos vinculados al borrar videos y reemplaza los objetos antiguos al recompilar, pero una pestaña cerrada justo después de un PUT directo puede dejar una subida sin registrar.
 
 ## Notas operativas
 
