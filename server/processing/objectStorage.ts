@@ -1,6 +1,7 @@
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 interface ObjectStorageConfig {
   endpoint: string;
@@ -34,100 +35,57 @@ function encodeRfc3986(str: string): string {
   );
 }
 
-function hmacSha256(key: Buffer | string, data: string): Buffer {
-  return crypto.createHmac('sha256', key).update(data, 'utf8').digest();
-}
-
-function sha256Hex(data: string): string {
-  return crypto.createHash('sha256').update(data, 'utf8').digest('hex');
-}
-
-export function createPresignedObjectUrl(params: {
-  method: 'PUT' | 'GET' | 'DELETE';
-  key: string;
-  contentType?: string;
-  expiresInSeconds?: number;
-}): string {
+function createS3Client(): { client: S3Client; config: ObjectStorageConfig } {
   const cfg = getConfig();
   if (!cfg.endpoint || !cfg.bucket || !cfg.accessKeyId || !cfg.secretAccessKey) {
     throw new Error('Object storage (S3/R2) is not configured on the server.');
   }
-
-  const parsedEndpoint = new URL(cfg.endpoint);
-  const host = parsedEndpoint.host;
-  const basePath = parsedEndpoint.pathname.replace(/\/+$/, '');
-  const cleanKey = params.key.replace(/^\/+/, '');
-  const encodedKeyPath = cleanKey.split('/').map(encodeRfc3986).join('/');
-  const canonicalUri = `${basePath}/${encodeRfc3986(cfg.bucket)}/${encodedKeyPath}`;
-
-  const now = new Date();
-  const isoBasic = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = isoBasic.slice(0, 8);
-  const expires = Math.max(60, Math.min(604800, params.expiresInSeconds ?? 3600));
-  const credentialScope = `${dateStamp}/${cfg.region}/s3/aws4_request`;
-
-  const signedHeaderMap: Record<string, string> = { host };
-  if (params.method === 'PUT' && params.contentType) {
-    signedHeaderMap['content-type'] = params.contentType;
-  }
-  const signedHeaderNames = Object.keys(signedHeaderMap).sort();
-  const canonicalHeaders = signedHeaderNames
-    .map((name) => `${name}:${signedHeaderMap[name]}\n`)
-    .join('');
-  const signedHeaders = signedHeaderNames.join(';');
-
-  const queryParams: Record<string, string> = {
-    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
-    'X-Amz-Credential': `${cfg.accessKeyId}/${credentialScope}`,
-    'X-Amz-Date': isoBasic,
-    'X-Amz-Expires': String(expires),
-    'X-Amz-SignedHeaders': signedHeaders,
+  return {
+    config: cfg,
+    client: new S3Client({
+      endpoint: cfg.endpoint,
+      region: cfg.region,
+      credentials: {
+        accessKeyId: cfg.accessKeyId,
+        secretAccessKey: cfg.secretAccessKey,
+      },
+      forcePathStyle: true,
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+    }),
   };
-
-  const canonicalQuery = Object.keys(queryParams)
-    .sort()
-    .map((k) => `${encodeRfc3986(k)}=${encodeRfc3986(queryParams[k])}`)
-    .join('&');
-
-  const canonicalRequest = [
-    params.method,
-    canonicalUri,
-    canonicalQuery,
-    canonicalHeaders,
-    signedHeaders,
-    'UNSIGNED-PAYLOAD',
-  ].join('\n');
-
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    isoBasic,
-    credentialScope,
-    sha256Hex(canonicalRequest),
-  ].join('\n');
-
-  const kDate = hmacSha256(`AWS4${cfg.secretAccessKey}`, dateStamp);
-  const kRegion = hmacSha256(kDate, cfg.region);
-  const kService = hmacSha256(kRegion, 's3');
-  const kSigning = hmacSha256(kService, 'aws4_request');
-  const signature = crypto
-    .createHmac('sha256', kSigning)
-    .update(stringToSign, 'utf8')
-    .digest('hex');
-
-  return `${parsedEndpoint.origin}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
-export function buildReadableObjectUrl(key: string): string {
+export async function createPresignedPutUrl(params: {
+  key: string;
+  contentType: string;
+  expiresInSeconds?: number;
+}): Promise<string> {
+  const { client, config: cfg } = createS3Client();
+
+  const command = new PutObjectCommand({
+    Bucket: cfg.bucket,
+    Key: params.key.replace(/^\/+/, ''),
+    ContentType: params.contentType,
+  });
+
+  return getSignedUrl(client, command, {
+    expiresIn: Math.max(60, Math.min(604800, params.expiresInSeconds ?? 3600)),
+  });
+}
+
+export async function buildReadableObjectUrl(key: string): Promise<string> {
   const cfg = getConfig();
   const cleanKey = key.replace(/^\/+/, '');
   if (cfg.publicBaseUrl) {
     const encodedKeyPath = cleanKey.split('/').map(encodeRfc3986).join('/');
     return `${cfg.publicBaseUrl}/${encodedKeyPath}`;
   }
-  return createPresignedObjectUrl({
-    method: 'GET',
-    key: cleanKey,
-    expiresInSeconds: 86400, // 24 hours for FFprobe + FFmpeg Audio-First streaming
+  const { client, config } = createS3Client();
+  return getSignedUrl(client, new GetObjectCommand({
+    Bucket: config.bucket,
+    Key: cleanKey,
+  }), {
+    expiresIn: 86400, // 24 hours for FFprobe + FFmpeg Audio-First streaming
   });
 }
 
@@ -162,8 +120,7 @@ export async function uploadFileToObjectStorage(params: {
     throw new Error('Object storage is not configured.');
   }
   const stat = fs.statSync(params.filePath);
-  const signedUrl = createPresignedObjectUrl({
-    method: 'PUT',
+  const signedUrl = await createPresignedPutUrl({
     key: params.key,
     contentType: params.contentType,
     expiresInSeconds: 3600,
@@ -186,12 +143,9 @@ export async function uploadFileToObjectStorage(params: {
 
 export async function deleteObjectFromStorage(key: string): Promise<void> {
   if (!isObjectStorageConfigured()) return;
-  const response = await fetch(createPresignedObjectUrl({
-    method: 'DELETE',
-    key: key.replace(/^\/+/, ''),
-    expiresInSeconds: 900,
-  }), { method: 'DELETE' });
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`R2 delete failed (${response.status}).`);
-  }
+  const { client, config } = createS3Client();
+  await client.send(new DeleteObjectCommand({
+    Bucket: config.bucket,
+    Key: key.replace(/^\/+/, ''),
+  }));
 }

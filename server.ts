@@ -42,7 +42,7 @@ import {
 import {
   buildReadableObjectUrl,
   buildStoredObjectUrl,
-  createPresignedObjectUrl,
+  createPresignedPutUrl,
   deleteObjectFromStorage,
   extractStoredObjectKey,
   isObjectStorageConfigured,
@@ -105,14 +105,14 @@ app.use('/storage', (_req, res) => {
   res.status(404).json({ error: 'Not found' });
 });
 
-app.get('/api/objects', (req, res) => {
+app.get('/api/objects', async (req, res) => {
   const key = typeof req.query.key === 'string' ? req.query.key.replace(/^\/+/, '') : '';
   if (!key || key.includes('..') || !/^(uploads|clips|thumbnails)\//.test(key)) {
     res.status(400).json({ error: 'Invalid object key.' });
     return;
   }
   try {
-    res.redirect(307, buildReadableObjectUrl(key));
+    res.redirect(307, await buildReadableObjectUrl(key));
   } catch (error) {
     res.status(503).json({
       error: error instanceof Error ? error.message : 'Object storage unavailable.',
@@ -765,7 +765,7 @@ app.delete('/api/videos/upload/:uploadId', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/uploads/presign', (req, res) => {
+app.post('/api/uploads/presign', async (req, res) => {
   if (!isObjectStorageConfigured()) {
     res.status(501).json({
       error: 'Direct S3/R2 object storage is not configured on this server.',
@@ -796,8 +796,7 @@ app.post('/api/uploads/presign', (req, res) => {
 
   const safeFilename = generateSafeMediaFilename(filename);
   const key = `uploads/${safeFilename}`;
-  const putUrl = createPresignedObjectUrl({
-    method: 'PUT',
+  const putUrl = await createPresignedPutUrl({
     key,
     contentType: mimetype || 'video/mp4',
     expiresInSeconds: 3600,
@@ -836,7 +835,7 @@ app.post('/api/videos/from-storage', async (req, res) => {
       return;
     }
 
-    const readUrl = buildReadableObjectUrl(key);
+    const readUrl = await buildReadableObjectUrl(key);
     const probed = await probeRemoteDirectUrl(readUrl);
     const numericProjectId = Number(projectId) || 1;
     const aiEnabled = useAi === true;
@@ -1175,7 +1174,7 @@ app.get('/api/videos/:id/preview', async (req, res) => {
     return;
   }
 
-  const videoPath = resolveVideoInputSource(video);
+  const videoPath = await resolveVideoInputSource(video);
   if (!videoPath.startsWith('http') && !fs.existsSync(videoPath)) {
     res.status(404).json({ error: 'Source video file is missing on disk.' });
     return;
@@ -1440,7 +1439,7 @@ app.post('/api/clips', async (req, res) => {
   );
 
   const nextId = db.nextIds.clip;
-  const videoPath = resolveVideoInputSource(video);
+  const videoPath = await resolveVideoInputSource(video);
   const thumbUrl = await generateThumbnail(
     videoPath,
     `clip-${nextId}-preview.jpg`,
@@ -1616,7 +1615,7 @@ app.post('/api/clips/:id/compile', async (req, res) => {
       return;
     }
     const trans = db.transcriptions.find((t) => t.videoId === clip.videoId);
-    const videoPath = resolveVideoInputSource(video);
+    const videoPath = await resolveVideoInputSource(video);
     const previousVariant = clip.exportVariants?.[variant];
 
     // Serialize heavy FFmpeg rendering through the single-worker queue
@@ -1675,7 +1674,7 @@ app.post('/api/clips/:id/compile', async (req, res) => {
   }
 });
 
-app.get('/api/clips/:id/download', (req, res) => {
+app.get('/api/clips/:id/download', async (req, res) => {
   const clipId = Number(req.params.id);
   const format = req.query.format === 'srt' ? 'srt' : 'mp4';
   const db = readDb();
@@ -1697,7 +1696,7 @@ app.get('/api/clips/:id/download', (req, res) => {
 
   const objectKey = extractStoredObjectKey(targetUrl);
   if (objectKey) {
-    res.redirect(307, buildReadableObjectUrl(objectKey));
+    res.redirect(307, await buildReadableObjectUrl(objectKey));
     return;
   }
   if (/^https?:\/\//i.test(targetUrl)) {

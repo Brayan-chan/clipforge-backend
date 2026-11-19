@@ -80,7 +80,7 @@ export async function runVideoPipeline(params: {
         }
       });
 
-      const videoPath = resolveVideoInputSource(initialVideo);
+      const videoPath = await resolveVideoInputSource(initialVideo);
 
       // Stage 1: Stream metadata + visual scene change detection
       await updateJob(
